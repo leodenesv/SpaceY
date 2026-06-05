@@ -1,0 +1,185 @@
+import requests
+from bs4 import BeautifulSoup
+import re
+import unicodedata
+import pandas as pd
+
+
+# -----------------------------------------------------------------------------
+# Helper Functions
+# These functions handle the extraction and cleaning of specific fields
+# from the raw HTML table cells, which often contain noise like references,
+# line breaks, and inconsistent formatting.
+# -----------------------------------------------------------------------------
+
+def date_time(table_cells):
+    """Extracts date and time strings from a table cell."""
+    return [data_time.strip() for data_time in list(table_cells.strings)][0:2]
+
+
+def booster_version(table_cells):
+    """Extracts the booster version string from a table cell."""
+    out = ''.join([booster_version for i, booster_version in enumerate(table_cells.strings) if i % 2 == 0][0:-1])
+    return out
+
+
+def landing_status(table_cells):
+    """Extracts the booster landing status from a table cell."""
+    out = [i for i in table_cells.strings][0]
+    return out
+
+
+def get_mass(table_cells):
+    """Extracts and normalizes the payload mass value from a table cell."""
+    mass = unicodedata.normalize("NFKD", table_cells.text).strip()
+    if mass:
+        mass.find("kg")
+        new_mass = mass[0:mass.find("kg") + 2]
+    else:
+        new_mass = 0
+    return new_mass
+
+
+def extract_column_from_header(row):
+    """
+    Extracts a clean column name from a table header element.
+    Removes <br>, <a>, and <sup> tags before reading the text content.
+    Returns None for purely numeric or empty header cells.
+    """
+    if row.br:
+        row.br.extract()
+    if row.a:
+        row.a.extract()
+    if row.sup:
+        row.sup.extract()
+
+    column_name = ' '.join(row.contents)
+
+    if not column_name.strip().isdigit():
+        column_name = column_name.strip()
+        return column_name
+
+
+static_url = "https://en.wikipedia.org/w/index.php?title=List_of_Falcon_9_and_Falcon_Heavy_launches&oldid=1027686922"
+
+headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                  "AppleWebKit/537.36 (KHTML, like Gecko) "
+                  "Chrome/91.0.4472.124 Safari/537.36"
+}
+
+response = requests.get(static_url, headers=headers)
+print("Response status:", response.status_code)
+
+# Parse the HTML content with BeautifulSoup
+soup = BeautifulSoup(response.text, 'html.parser')
+
+# Verify the page was loaded correctly
+print("Page title:", soup.title)
+
+html_tables = soup.find_all('table')
+
+# The third table contains the Falcon 9 launch records
+first_launch_table = html_tables[2]
+
+column_names = []
+
+for th in first_launch_table.find_all('th'):
+    name = extract_column_from_header(th)
+    if name is not None and len(name) > 0:
+        column_names.append(name)
+
+print("Extracted columns:", column_names)
+
+
+launch_dict = dict.fromkeys(column_names)
+
+# Remove the combined date/time column — it will be split into Date and Time
+del launch_dict['Date and time ( )']
+
+# Initialize all keys with empty lists
+launch_dict['Flight No.']      = []
+launch_dict['Launch site']     = []
+launch_dict['Payload']         = []
+launch_dict['Payload mass']    = []
+launch_dict['Orbit']           = []
+launch_dict['Customer']        = []
+launch_dict['Launch outcome']  = []
+launch_dict['Version Booster'] = []
+launch_dict['Booster landing'] = []
+launch_dict['Date']            = []
+launch_dict['Time']            = []
+
+extracted_row = 0
+
+for table_number, table in enumerate(soup.find_all('table', "wikitable plainrowheaders collapsible")):
+    for rows in table.find_all("tr"):
+
+        # Check if the first header cell contains a flight number
+        if rows.th:
+            if rows.th.string:
+                flight_number = rows.th.string.strip()
+                flag = flight_number.isdigit()
+        else:
+            flag = False
+
+        row = rows.find_all('td')
+
+        if flag:
+            extracted_row += 1
+
+            # Flight Number
+            launch_dict['Flight No.'].append(flight_number)
+
+            # Date and Time — split from the combined cell
+            datatimelist = date_time(row[0])
+            launch_dict['Date'].append(datatimelist[0].strip(','))
+            launch_dict['Time'].append(datatimelist[1])
+
+            # Booster Version — fallback to anchor text if string extraction fails
+            bv = booster_version(row[1])
+            if not bv:
+                bv = row[1].a.string
+            launch_dict['Version Booster'].append(bv)
+
+            # Launch Site
+            try:
+                launch_dict['Launch site'].append(row[2].a.string)
+            except AttributeError:
+                launch_dict['Launch site'].append(None)
+
+            # Payload name
+            try:
+                launch_dict['Payload'].append(row[3].a.string)
+            except AttributeError:
+                launch_dict['Payload'].append(None)
+
+            # Payload Mass — cleaned and normalized by helper function
+            launch_dict['Payload mass'].append(get_mass(row[4]))
+
+            # Orbit
+            try:
+                launch_dict['Orbit'].append(row[5].a.string)
+            except AttributeError:
+                launch_dict['Orbit'].append(None)
+
+            # Customer — some rows have no linked customer, hence the fallback
+            try:
+                launch_dict['Customer'].append(row[6].a.string)
+            except AttributeError:
+                launch_dict['Customer'].append(None)
+
+            # Launch Outcome
+            launch_dict['Launch outcome'].append(list(row[7].strings)[0])
+
+            # Booster Landing status
+            launch_dict['Booster landing'].append(landing_status(row[8]))
+
+print(f"\nTotal rows extracted: {extracted_row}")
+
+df = pd.DataFrame({key: pd.Series(value) for key, value in launch_dict.items()})
+print(df.head())
+print(f"\nDataFrame shape: {df.shape}")
+
+df.to_csv('spacex_web_scraped.csv', index=False)
+print("\nDataset exported to spacex_web_scraped.csv")
