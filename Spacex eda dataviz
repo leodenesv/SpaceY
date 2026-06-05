@@ -1,0 +1,187 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+
+# -----------------------------------------------------------------------------
+# Load the dataset produced by the data wrangling lab (dataset_part_2.csv).
+# This file already contains the binary Class label (1 = successful landing,
+# 0 = unsuccessful) created in the previous step.
+# -----------------------------------------------------------------------------
+
+df = pd.read_csv(
+    "https://cf-courses-data.s3.us.cloud-object-storage.appdomain.cloud/"
+    "IBM-DS0321EN-SkillsNetwork/datasets/dataset_part_2.csv"
+)
+print("Dataset loaded successfully.")
+print(f"Shape: {df.shape}")
+print(df.head(5))
+
+
+# -----------------------------------------------------------------------------
+# Baseline visualization: FlightNumber vs PayloadMass colored by landing Class.
+# As flight numbers increase over time, SpaceX accumulated operational experience,
+# which is reflected in a higher rate of successful first-stage recoveries.
+# -----------------------------------------------------------------------------
+
+sns.catplot(y="PayloadMass", x="FlightNumber", hue="Class", data=df, aspect=5)
+plt.xlabel("Flight Number", fontsize=20)
+plt.ylabel("Pay Load Mass (kg)", fontsize=20)
+plt.title("Flight Number vs Payload Mass by Landing Outcome")
+plt.show()
+
+
+# -----------------------------------------------------------------------------
+# FlightNumber vs LaunchSite — understanding which sites were used over time
+# and how the success rate evolved at each location as more flights were conducted.
+# -----------------------------------------------------------------------------
+
+sns.catplot(x="FlightNumber", y="LaunchSite", hue="Class", data=df, aspect=5)
+plt.xlabel("Flight Number", fontsize=20)
+plt.ylabel("Launch Site", fontsize=20)
+plt.title("Flight Number vs Launch Site by Landing Outcome")
+plt.show()
+
+
+# -----------------------------------------------------------------------------
+# PayloadMass vs LaunchSite — checking if different sites handled different
+# payload ranges. Notably, VAFB SLC-4E shows no launches above ~10,000 kg,
+# suggesting operational or geographic constraints at that site.
+# -----------------------------------------------------------------------------
+
+sns.catplot(x="PayloadMass", y="LaunchSite", hue="Class", data=df, aspect=5)
+plt.xlabel("Pay Load Mass (kg)", fontsize=20)
+plt.ylabel("Launch Site", fontsize=20)
+plt.title("Payload Mass vs Launch Site by Landing Outcome")
+plt.show()
+
+
+# -----------------------------------------------------------------------------
+# Success rate by orbit type — grouping launches by their target orbit and
+# computing the mean of the Class column gives a success rate per orbit type.
+# Some orbits like ES-L1, GEO, HEO, and SSO show 100% success rates,
+# while others like SO have lower rates due to mission-specific constraints.
+# -----------------------------------------------------------------------------
+
+orbit_success = df.groupby("Orbit")["Class"].mean().reset_index()
+orbit_success.columns = ["Orbit", "SuccessRate"]
+
+plt.figure(figsize=(12, 6))
+sns.barplot(x="Orbit", y="SuccessRate", data=orbit_success)
+plt.xlabel("Orbit Type", fontsize=20)
+plt.ylabel("Success Rate", fontsize=20)
+plt.title("Success Rate by Orbit Type", fontsize=20)
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
+
+# -----------------------------------------------------------------------------
+# FlightNumber vs Orbit — reveals how SpaceX's experience with each orbit type
+# changed over time. In LEO, success rate increases with flight number,
+# showing a clear learning curve. In GTO, results are more mixed throughout.
+# -----------------------------------------------------------------------------
+
+sns.catplot(x="FlightNumber", y="Orbit", hue="Class", data=df, aspect=5)
+plt.xlabel("Flight Number", fontsize=20)
+plt.ylabel("Orbit", fontsize=20)
+plt.title("Flight Number vs Orbit Type by Landing Outcome")
+plt.show()
+
+
+# -----------------------------------------------------------------------------
+# PayloadMass vs Orbit — heavier payloads in LEO, ISS, and Polar orbits still
+# achieve successful landings, suggesting the booster recovery procedure is
+# robust across a wide range of mission profiles for these orbit types.
+# GTO shows mixed outcomes regardless of payload, making it harder to predict.
+# -----------------------------------------------------------------------------
+
+sns.catplot(x="PayloadMass", y="Orbit", hue="Class", data=df, aspect=5)
+plt.xlabel("Pay Load Mass (kg)", fontsize=20)
+plt.ylabel("Orbit", fontsize=20)
+plt.title("Payload Mass vs Orbit Type by Landing Outcome")
+plt.show()
+
+
+# -----------------------------------------------------------------------------
+# Yearly success rate trend — extracting the year from the Date string and
+# computing the average Class value per year shows the overall improvement in
+# SpaceX's landing reliability from 2010 through 2020.
+# The split("-")[0] approach works because dates are stored as YYYY-MM-DD strings.
+# -----------------------------------------------------------------------------
+
+year = []
+def Extract_year():
+    for i in df["Date"]:
+        year.append(i.split("-")[0])
+    return year
+
+Extract_year()
+df['Date'] = year
+
+yearly_success = df.groupby("Date")["Class"].mean().reset_index()
+yearly_success.columns = ["Year", "SuccessRate"]
+
+plt.figure(figsize=(12, 6))
+plt.plot(yearly_success["Year"], yearly_success["SuccessRate"], marker='o', linestyle='-')
+plt.xlabel("Year", fontsize=20)
+plt.ylabel("Average Success Rate", fontsize=20)
+plt.title("Yearly Launch Success Rate Trend", fontsize=20)
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
+
+# -----------------------------------------------------------------------------
+# Feature Engineering — select the predictive variables for the ML model.
+# We keep both numeric features (FlightNumber, PayloadMass, etc.) and
+# categorical ones (Orbit, LaunchSite, LandingPad, Serial) that will be
+# encoded in the next step.
+# -----------------------------------------------------------------------------
+
+features = df[[
+    'FlightNumber', 'PayloadMass', 'Orbit', 'LaunchSite',
+    'Flights', 'GridFins', 'Reused', 'Legs', 'LandingPad',
+    'Block', 'ReusedCount', 'Serial'
+]]
+print("\nSelected features:")
+print(features.head())
+
+
+# -----------------------------------------------------------------------------
+# One-Hot Encoding of categorical columns using pd.get_dummies().
+# Machine learning models require numeric input, so text-based categories must
+# be converted into binary indicator columns — one per unique category value.
+# We encode: Orbit, LaunchSite, LandingPad, and Serial.
+# The result is a wider DataFrame where each category becomes its own column.
+# -----------------------------------------------------------------------------
+
+features_one_hot = pd.get_dummies(
+    features,
+    columns=['Orbit', 'LaunchSite', 'LandingPad', 'Serial']
+)
+print(f"\nShape after One-Hot Encoding: {features_one_hot.shape}")
+print(features_one_hot.head())
+
+
+# -----------------------------------------------------------------------------
+# Cast all columns to float64 to ensure compatibility with scikit-learn models.
+# Boolean columns created by get_dummies (True/False) are converted to 1.0/0.0,
+# and any integer columns become uniform float64 — a requirement for many
+# ML estimators that do not accept mixed numeric types.
+# -----------------------------------------------------------------------------
+
+features_one_hot = features_one_hot.astype('float64')
+print("\nData types after casting:")
+print(features_one_hot.dtypes.value_counts())
+
+
+# -----------------------------------------------------------------------------
+# Export the final engineered feature matrix to CSV.
+# This file (dataset_part_3.csv) will serve as the input for the ML modeling
+# phase in the next lab of the SpaceX capstone project.
+# -----------------------------------------------------------------------------
+
+features_one_hot.to_csv('dataset_part_3.csv', index=False)
+print("\nFeature matrix exported to dataset_part_3.csv")
