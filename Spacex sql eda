@@ -1,0 +1,220 @@
+import pandas as pd
+import sqlite3
+
+
+# -----------------------------------------------------------------------------
+# Database connection and data loading
+# We create a local SQLite database file and load the SpaceX CSV directly
+# from the IBM cloud storage URL into a staging table called SPACEXTBL.
+# A clean version called SPACEXTABLE is then created by filtering out any
+# rows where the Date column is null, ensuring data quality for all queries.
+# -----------------------------------------------------------------------------
+
+con = sqlite3.connect("my_data1.db")
+cur = con.cursor()
+
+df = pd.read_csv(
+    "https://cf-courses-data.s3.us.cloud-object-storage.appdomain.cloud/"
+    "IBM-DS0321EN-SkillsNetwork/labs/module_2/data/Spacex.csv"
+)
+df.to_sql("SPACEXTBL", con, if_exists='replace', index=False, method="multi")
+
+# Remove any rows with null dates to ensure clean analysis
+cur.execute("DROP TABLE IF EXISTS SPACEXTABLE")
+cur.execute("CREATE TABLE SPACEXTABLE AS SELECT * FROM SPACEXTBL WHERE Date IS NOT NULL")
+con.commit()
+
+print("Database ready. Tables created: SPACEXTBL, SPACEXTABLE")
+print(f"Total records loaded: {pd.read_sql('SELECT COUNT(*) FROM SPACEXTABLE', con).iloc[0,0]}\n")
+
+
+# -----------------------------------------------------------------------------
+# Helper function to run and display SQL queries consistently
+# Each query result is loaded into a Pandas DataFrame for clean output.
+# -----------------------------------------------------------------------------
+
+def run_query(description, query):
+    print(f"{'='*60}")
+    print(f"{description}")
+    print(f"{'='*60}")
+    result = pd.read_sql(query, con)
+    print(result.to_string(index=False))
+    print()
+    return result
+
+
+# -----------------------------------------------------------------------------
+# Unique launch sites used across all SpaceX missions
+# Knowing the distinct sites helps understand SpaceX's geographic footprint
+# and which facilities were used for Falcon 9 operations.
+# -----------------------------------------------------------------------------
+
+run_query(
+    "Unique launch sites",
+    'SELECT DISTINCT "Launch_Site" FROM SPACEXTABLE'
+)
+
+
+# -----------------------------------------------------------------------------
+# Sample records from Cape Canaveral launch sites
+# Filtering by the 'CCA' prefix returns records from Cape Canaveral Air Force
+# Station, one of SpaceX's primary launch locations on the east coast of the US.
+# -----------------------------------------------------------------------------
+
+run_query(
+    "5 records from launch sites starting with CCA",
+    'SELECT * FROM SPACEXTABLE WHERE "Launch_Site" LIKE \'CCA%\' LIMIT 5'
+)
+
+
+# -----------------------------------------------------------------------------
+# Total payload mass delivered under NASA's Commercial Resupply Services program
+# CRS missions supply the International Space Station (ISS). Summing their
+# payload mass gives a sense of SpaceX's contribution to ISS logistics.
+# -----------------------------------------------------------------------------
+
+run_query(
+    "Total payload mass carried for NASA (CRS) missions",
+    '''
+    SELECT SUM("PAYLOAD_MASS__KG_") AS Total_Payload_Mass_kg
+    FROM SPACEXTABLE
+    WHERE "Customer" LIKE '%NASA (CRS)%'
+    '''
+)
+
+
+# -----------------------------------------------------------------------------
+# Average payload mass for the F9 v1.1 booster version
+# The F9 v1.1 was an upgraded version of the original Falcon 9. Comparing its
+# average payload against other versions reveals capability improvements.
+# -----------------------------------------------------------------------------
+
+run_query(
+    "Average payload mass for booster version F9 v1.1",
+    '''
+    SELECT AVG("PAYLOAD_MASS__KG_") AS Avg_Payload_Mass_kg
+    FROM SPACEXTABLE
+    WHERE "Booster_Version" = 'F9 v1.1'
+    '''
+)
+
+
+# -----------------------------------------------------------------------------
+# Date of the first successful landing on a ground pad
+# Ground pad landings (Return to Launch Site - RTLS) were a major milestone
+# in reusability. MIN() identifies the earliest date this was achieved.
+# -----------------------------------------------------------------------------
+
+run_query(
+    "First successful ground pad landing date",
+    '''
+    SELECT MIN("Date") AS First_Ground_Pad_Success
+    FROM SPACEXTABLE
+    WHERE "Landing_Outcome" = 'Success (ground pad)'
+    '''
+)
+
+
+# -----------------------------------------------------------------------------
+# Boosters that successfully landed on a drone ship with mid-range payload
+# Cross-filtering by landing outcome and payload range identifies which
+# booster versions were capable of drone ship recovery at moderate payload loads.
+# -----------------------------------------------------------------------------
+
+run_query(
+    "Boosters with drone ship success and payload between 4000-6000 kg",
+    '''
+    SELECT "Booster_Version"
+    FROM SPACEXTABLE
+    WHERE "Landing_Outcome" = 'Success (drone ship)'
+      AND "PAYLOAD_MASS__KG_" > 4000
+      AND "PAYLOAD_MASS__KG_" < 6000
+    '''
+)
+
+
+# -----------------------------------------------------------------------------
+# Count of each mission outcome category
+# Grouping by Mission_Outcome shows how often missions fully succeeded,
+# partially succeeded, or failed, giving a high-level reliability picture.
+# -----------------------------------------------------------------------------
+
+run_query(
+    "Total count per mission outcome",
+    '''
+    SELECT "Mission_Outcome", COUNT(*) AS Count
+    FROM SPACEXTABLE
+    GROUP BY "Mission_Outcome"
+    ORDER BY Count DESC
+    '''
+)
+
+
+# -----------------------------------------------------------------------------
+# Booster versions that carried the maximum payload mass ever recorded
+# The subquery first finds the single highest payload value in the dataset,
+# then the outer query returns all boosters that matched that weight —
+# since multiple flights may have carried the same maximum load.
+# -----------------------------------------------------------------------------
+
+run_query(
+    "Booster versions that carried the maximum payload mass",
+    '''
+    SELECT "Booster_Version", "PAYLOAD_MASS__KG_"
+    FROM SPACEXTABLE
+    WHERE "PAYLOAD_MASS__KG_" = (
+        SELECT MAX("PAYLOAD_MASS__KG_")
+        FROM SPACEXTABLE
+    )
+    '''
+)
+
+
+# -----------------------------------------------------------------------------
+# Drone ship landing failures in 2015 with month, booster, and launch site
+# SQLite does not have a native MONTHNAME() function, so substr() is used to
+# extract the month (characters 6-7) and year (characters 1-4) from the date
+# string, which follows the YYYY-MM-DD format in this dataset.
+# -----------------------------------------------------------------------------
+
+run_query(
+    "Drone ship failures in 2015 — month, booster version, launch site",
+    '''
+    SELECT
+        substr("Date", 6, 2)  AS Month,
+        "Landing_Outcome",
+        "Booster_Version",
+        "Launch_Site"
+    FROM SPACEXTABLE
+    WHERE "Landing_Outcome" = 'Failure (drone ship)'
+      AND substr("Date", 0, 5) = '2015'
+    '''
+)
+
+
+# -----------------------------------------------------------------------------
+# Ranked count of landing outcomes between June 2010 and March 2017
+# BETWEEN filters rows within the date range (inclusive on both ends).
+# Grouping by landing outcome and ordering by count descending produces
+# a leaderboard showing which outcomes were most and least common
+# during SpaceX's early operational years.
+# -----------------------------------------------------------------------------
+
+run_query(
+    "Landing outcome counts from 2010-06-04 to 2017-03-20 (descending)",
+    '''
+    SELECT "Landing_Outcome", COUNT(*) AS Count
+    FROM SPACEXTABLE
+    WHERE "Date" BETWEEN '2010-06-04' AND '2017-03-20'
+    GROUP BY "Landing_Outcome"
+    ORDER BY Count DESC
+    '''
+)
+
+
+# -----------------------------------------------------------------------------
+# Close the database connection after all queries have been executed
+# -----------------------------------------------------------------------------
+
+con.close()
+print("All queries completed. Database connection closed.")
