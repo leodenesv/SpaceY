@@ -1,0 +1,227 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn import preprocessing
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.neighbors import KNeighborsClassifier
+
+
+# -----------------------------------------------------------------------------
+# Helper function to visualize model performance via confusion matrix.
+# Rows represent true labels; columns represent predicted labels.
+# The heatmap makes it easy to spot false positives and false negatives.
+# -----------------------------------------------------------------------------
+
+def plot_confusion_matrix(y, y_predict, title='Confusion Matrix'):
+    from sklearn.metrics import confusion_matrix
+    cm = confusion_matrix(y, y_predict)
+    ax = plt.subplot()
+    sns.heatmap(cm, annot=True, ax=ax)
+    ax.set_xlabel('Predicted labels')
+    ax.set_ylabel('True labels')
+    ax.set_title(title)
+    ax.xaxis.set_ticklabels(['did not land', 'land'])
+    ax.yaxis.set_ticklabels(['did not land', 'landed'])
+    plt.show()
+
+
+# -----------------------------------------------------------------------------
+# Load the datasets directly from IBM cloud storage.
+# dataset_part_2 contains the raw features and the binary Class label.
+# dataset_part_3 contains the one-hot encoded feature matrix produced in
+# the previous EDA lab — this is the input X for the ML models.
+# -----------------------------------------------------------------------------
+
+data = pd.read_csv(
+    "https://cf-courses-data.s3.us.cloud-object-storage.appdomain.cloud/"
+    "IBM-DS0321EN-SkillsNetwork/datasets/dataset_part_2.csv"
+)
+
+X = pd.read_csv(
+    "https://cf-courses-data.s3.us.cloud-object-storage.appdomain.cloud/"
+    "IBM-DS0321EN-SkillsNetwork/datasets/dataset_part_3.csv"
+)
+
+print("data shape:", data.shape)
+print("X shape:", X.shape)
+print(data.head())
+print(X.head())
+
+
+# -----------------------------------------------------------------------------
+# TASK 1: Extract the target variable Y from the Class column.
+# Single bracket notation keeps it as a Pandas Series before converting
+# to a NumPy array with to_numpy(), which is required by scikit-learn.
+# -----------------------------------------------------------------------------
+
+Y = data['Class'].to_numpy()
+print("\nY shape:", Y.shape)
+print("Class distribution:", np.unique(Y, return_counts=True))
+
+
+# -----------------------------------------------------------------------------
+# TASK 2: Standardize the feature matrix X.
+# StandardScaler transforms each feature to have mean=0 and std=1.
+# This is critical for SVM, Logistic Regression, and KNN since they are
+# sensitive to the scale of input features. Decision Tree is not affected
+# by scaling but we apply it uniformly for consistency.
+# fit_transform computes the scaling parameters on X and applies them.
+# -----------------------------------------------------------------------------
+
+transform = preprocessing.StandardScaler()
+X = transform.fit_transform(X)
+print("\nX standardized. Sample mean:", X.mean().round(4), "Sample std:", X.std().round(4))
+
+
+# -----------------------------------------------------------------------------
+# TASK 3: Split data into training (80%) and test (20%) sets.
+# random_state=2 ensures reproducibility across runs.
+# stratify is not set here to match the original lab configuration.
+# The test set contains 18 samples (20% of ~90 Falcon 9 records).
+# -----------------------------------------------------------------------------
+
+X_train, X_test, Y_train, Y_test = train_test_split(
+    X, Y, test_size=0.2, random_state=2
+)
+
+print("\nTraining samples:", X_train.shape[0])
+print("Test samples:", X_test.shape[0])
+print("Y_test shape:", Y_test.shape)
+
+
+# -----------------------------------------------------------------------------
+# TASK 4 & 5: Logistic Regression with GridSearchCV.
+# We search over regularization strength C and penalty type.
+# cv=10 performs 10-fold cross validation on the training set.
+# best_params_ shows the winning combination; best_score_ is the mean
+# cross-validated accuracy on the training folds.
+# The test score evaluates generalization on truly unseen data.
+# -----------------------------------------------------------------------------
+
+parameters_lr = {
+    'C': [0.01, 0.1, 1],
+    'penalty': ['l2'],
+    'solver': ['lbfgs']
+}
+
+lr = LogisticRegression()
+logreg_cv = GridSearchCV(lr, parameters_lr, cv=10)
+logreg_cv.fit(X_train, Y_train)
+
+print("\n=== Logistic Regression ===")
+print("Best parameters:", logreg_cv.best_params_)
+print("Validation accuracy:", logreg_cv.best_score_)
+print("Test accuracy:", logreg_cv.score(X_test, Y_test))
+
+yhat = logreg_cv.predict(X_test)
+plot_confusion_matrix(Y_test, yhat, title='Logistic Regression - Confusion Matrix')
+
+
+# -----------------------------------------------------------------------------
+# TASK 6 & 7: Support Vector Machine with GridSearchCV.
+# We test four kernel types and search over C and gamma using log scale.
+# np.logspace(-3, 3, 5) generates 5 values from 0.001 to 1000.
+# The RBF kernel typically wins because the data is not linearly separable.
+# -----------------------------------------------------------------------------
+
+parameters_svm = {
+    'kernel': ('linear', 'rbf', 'poly', 'sigmoid'),
+    'C': np.logspace(-3, 3, 5),
+    'gamma': np.logspace(-3, 3, 5)
+}
+
+svm = SVC()
+svm_cv = GridSearchCV(svm, parameters_svm, cv=10)
+svm_cv.fit(X_train, Y_train)
+
+print("\n=== Support Vector Machine ===")
+print("Best parameters:", svm_cv.best_params_)
+print("Validation accuracy:", svm_cv.best_score_)
+print("Test accuracy:", svm_cv.score(X_test, Y_test))
+
+yhat = svm_cv.predict(X_test)
+plot_confusion_matrix(Y_test, yhat, title='SVM - Confusion Matrix')
+
+
+# -----------------------------------------------------------------------------
+# TASK 8 & 9: Decision Tree with GridSearchCV.
+# We search over splitting criterion, tree depth, feature selection strategy,
+# and minimum sample requirements at leaves and splits.
+# max_features='sqrt' replaces the deprecated 'auto' from older scikit-learn.
+# Deeper trees can overfit; GridSearchCV finds the right balance.
+# -----------------------------------------------------------------------------
+
+parameters_tree = {
+    'criterion': ['gini', 'entropy'],
+    'splitter': ['best', 'random'],
+    'max_depth': [2*n for n in range(1, 10)],
+    'max_features': ['sqrt'],
+    'min_samples_leaf': [1, 2, 4],
+    'min_samples_split': [2, 5, 10]
+}
+
+tree = DecisionTreeClassifier()
+tree_cv = GridSearchCV(tree, parameters_tree, cv=10)
+tree_cv.fit(X_train, Y_train)
+
+print("\n=== Decision Tree ===")
+print("Best parameters:", tree_cv.best_params_)
+print("Validation accuracy:", tree_cv.best_score_)
+print("Test accuracy:", tree_cv.score(X_test, Y_test))
+
+yhat = tree_cv.predict(X_test)
+plot_confusion_matrix(Y_test, yhat, title='Decision Tree - Confusion Matrix')
+
+
+# -----------------------------------------------------------------------------
+# TASK 10 & 11: K-Nearest Neighbors with GridSearchCV.
+# We search over the number of neighbors, distance algorithm, and
+# the Minkowski distance parameter p (1=Manhattan, 2=Euclidean).
+# KNN is a non-parametric method — predictions are based purely on
+# the k closest training samples in the standardized feature space.
+# -----------------------------------------------------------------------------
+
+parameters_knn = {
+    'n_neighbors': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    'algorithm': ['auto', 'ball_tree', 'kd_tree', 'brute'],
+    'p': [1, 2]
+}
+
+KNN = KNeighborsClassifier()
+knn_cv = GridSearchCV(KNN, parameters_knn, cv=10)
+knn_cv.fit(X_train, Y_train)
+
+print("\n=== K-Nearest Neighbors ===")
+print("Best parameters:", knn_cv.best_params_)
+print("Validation accuracy:", knn_cv.best_score_)
+print("Test accuracy:", knn_cv.score(X_test, Y_test))
+
+yhat = knn_cv.predict(X_test)
+plot_confusion_matrix(Y_test, yhat, title='KNN - Confusion Matrix')
+
+
+# -----------------------------------------------------------------------------
+# TASK 12: Compare all models and identify the best performer.
+# We use test set accuracy as the final evaluation metric since it reflects
+# performance on data the models have never seen during training or tuning.
+# All four models are compared side by side in a summary table.
+# -----------------------------------------------------------------------------
+
+models = {
+    'Logistic Regression': logreg_cv.score(X_test, Y_test),
+    'SVM':                 svm_cv.score(X_test, Y_test),
+    'Decision Tree':       tree_cv.score(X_test, Y_test),
+    'KNN':                 knn_cv.score(X_test, Y_test)
+}
+
+best_model = max(models, key=models.get)
+
+print("\n=== Model Comparison (Test Accuracy) ===")
+for model, score in models.items():
+    print(f"{model:25s}: {score:.4f} ({score*100:.2f}%)")
+
+print(f"\nBest model: {best_model} — Test Accuracy: {models[best_model]*100:.2f}%")
