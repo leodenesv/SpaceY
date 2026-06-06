@@ -1,0 +1,272 @@
+import folium
+import pandas as pd
+from folium.plugins import MarkerCluster
+from folium.plugins import MousePosition
+from folium.features import DivIcon
+from math import sin, cos, sqrt, atan2, radians
+
+
+# -----------------------------------------------------------------------------
+# Load the SpaceX launch dataset enriched with latitude and longitude values.
+# We keep only the columns needed for geographic analysis: site name,
+# coordinates, and the binary landing outcome (class).
+# -----------------------------------------------------------------------------
+
+spacex_df = pd.read_csv(
+    "https://cf-courses-data.s3.us.cloud-object-storage.appdomain.cloud/"
+    "IBM-DS0321EN-SkillsNetwork/datasets/spacex_launch_geo.csv"
+)
+
+spacex_df = spacex_df[['Launch Site', 'Lat', 'Long', 'class']]
+
+# Deduplicate to get one representative coordinate per launch site
+launch_sites_df = spacex_df.groupby(['Launch Site'], as_index=False).first()
+launch_sites_df = launch_sites_df[['Launch Site', 'Lat', 'Long']]
+
+print("Launch sites and coordinates:")
+print(launch_sites_df)
+
+
+# -----------------------------------------------------------------------------
+# Haversine formula for calculating the great-circle distance between two
+# geographic coordinates. Returns the distance in kilometers.
+# This is used in Task 3 to measure proximity of launch sites to nearby
+# infrastructure such as coastlines, cities, railways, and highways.
+# -----------------------------------------------------------------------------
+
+def calculate_distance(lat1, lon1, lat2, lon2):
+    R = 6373.0  # approximate radius of Earth in km
+    lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+    dlon = lon2 - lon1
+    dlat = lat2 - lat1
+    a = sin(dlat / 2)**2 + cos(lat1) * cos(lat2) * sin(dlon / 2)**2
+    c = 2 * atan2(sqrt(a), sqrt(1 - a))
+    return R * c
+
+
+# -----------------------------------------------------------------------------
+# NASA Johnson Space Center is used as the initial map center since it is the
+# mission control hub for SpaceX launches. zoom_start=5 provides a broad view
+# of the US coastline where all four launch sites are located.
+# -----------------------------------------------------------------------------
+
+nasa_coordinate = [29.559684888503615, -95.0830971930759]
+
+
+# =============================================================================
+# TASK 1: Mark all launch sites on the map
+# Each site gets a filled circle (folium.Circle) to indicate its location
+# and a text label (folium.Marker with DivIcon) showing its name.
+# Both objects are added to the same map object.
+# =============================================================================
+
+site_map = folium.Map(location=nasa_coordinate, zoom_start=5)
+
+for index, row in launch_sites_df.iterrows():
+    coordinate = [row['Lat'], row['Long']]
+
+    # Filled circle with popup showing site name on click
+    circle = folium.Circle(
+        coordinate,
+        radius=1000,
+        color='#d35400',
+        fill=True
+    ).add_child(folium.Popup(row['Launch Site']))
+
+    # Text label positioned at the site coordinate
+    marker = folium.map.Marker(
+        coordinate,
+        icon=DivIcon(
+            icon_size=(20, 20),
+            icon_anchor=(0, 0),
+            html='<div style="font-size: 12; color:#d35400;"><b>%s</b></div>'
+                 % row['Launch Site'],
+        )
+    )
+
+    site_map.add_child(circle)
+    site_map.add_child(marker)
+
+# Export to HTML so it can be opened in any browser without running Python
+site_map.save('task1_launch_sites.html')
+print("Task 1 map saved to task1_launch_sites.html")
+
+
+# =============================================================================
+# TASK 2: Mark success and failure outcomes for each launch record
+# Green markers indicate a successful first-stage landing (class=1).
+# Red markers indicate a failed or unrecovered landing (class=0).
+# MarkerCluster groups overlapping markers at the same coordinate into
+# a single cluster icon that expands when clicked — essential here since
+# many launches share the exact same launch site coordinates.
+# =============================================================================
+
+# Map each class value to a color for the marker icon
+spacex_df['marker_color'] = spacex_df['class'].apply(
+    lambda x: 'green' if x == 1 else 'red'
+)
+
+site_map2 = folium.Map(location=nasa_coordinate, zoom_start=5)
+marker_cluster = MarkerCluster()
+site_map2.add_child(marker_cluster)
+
+for index, record in spacex_df.iterrows():
+    marker = folium.Marker(
+        location=[record['Lat'], record['Long']],
+        icon=folium.Icon(color='white', icon_color=record['marker_color'])
+    )
+    marker_cluster.add_child(marker)
+
+site_map2.save('task2_launch_outcomes.html')
+print("Task 2 map saved to task2_launch_outcomes.html")
+
+
+# =============================================================================
+# TASK 3: Measure distances from a launch site to nearby infrastructure
+# We use CCAFS SLC-40 as the reference launch site.
+# MousePosition is added to the map so that coordinates of nearby points
+# of interest (coastline, city, railway, highway) can be identified
+# interactively in the browser by hovering over the map.
+# Distances are calculated using the Haversine formula and displayed as
+# labeled markers connected to the launch site by PolyLines.
+# =============================================================================
+
+# Reference: CCAFS SLC-40 coordinates
+launch_site_lat = 28.56232
+launch_site_lon = -80.57718
+
+site_map3 = folium.Map(location=[launch_site_lat, launch_site_lon], zoom_start=12)
+
+# MousePosition plugin displays live lat/long coordinates on the map
+# as the user moves their cursor, enabling point identification
+formatter = "function(num) {return L.Util.formatNum(num, 5);};"
+mouse_position = MousePosition(
+    position='topright',
+    separator=' Long: ',
+    empty_string='NaN',
+    lng_first=False,
+    num_digits=20,
+    prefix='Lat:',
+    lat_formatter=formatter,
+    lng_formatter=formatter,
+)
+site_map3.add_child(mouse_position)
+
+# Mark the launch site itself for reference
+folium.Marker(
+    [launch_site_lat, launch_site_lon],
+    icon=DivIcon(
+        icon_size=(20, 20), icon_anchor=(0, 0),
+        html='<div style="font-size: 12; color:#1f618d;"><b>CCAFS SLC-40</b></div>'
+    )
+).add_to(site_map3)
+
+
+# --- Distance to the closest coastline ---
+# The Atlantic Ocean coastline is immediately east of the launch complex.
+# These coordinates were identified using the MousePosition tool on the map.
+coastline_lat = 28.56367
+coastline_lon = -80.57163
+
+distance_coastline = calculate_distance(
+    launch_site_lat, launch_site_lon,
+    coastline_lat, coastline_lon
+)
+print(f"Distance to coastline: {distance_coastline:.2f} km")
+
+site_map3.add_child(folium.Marker(
+    [coastline_lat, coastline_lon],
+    icon=DivIcon(
+        icon_size=(20, 20), icon_anchor=(0, 0),
+        html='<div style="font-size: 12; color:#d35400;"><b>Coastline: %.2f KM</b></div>'
+             % distance_coastline,
+    )
+))
+site_map3.add_child(folium.PolyLine(
+    locations=[[launch_site_lat, launch_site_lon], [coastline_lat, coastline_lon]],
+    weight=2, color='orange'
+))
+
+
+# --- Distance to the closest city (Cocoa Beach, FL) ---
+# Launch sites are deliberately positioned away from dense urban areas
+# to create a safety buffer in case of launch anomalies.
+city_lat = 28.3922
+city_lon = -80.6077
+
+distance_city = calculate_distance(
+    launch_site_lat, launch_site_lon,
+    city_lat, city_lon
+)
+print(f"Distance to city (Cocoa Beach): {distance_city:.2f} km")
+
+site_map3.add_child(folium.Marker(
+    [city_lat, city_lon],
+    icon=DivIcon(
+        icon_size=(20, 20), icon_anchor=(0, 0),
+        html='<div style="font-size: 12; color:#1a5276;"><b>City: %.2f KM</b></div>'
+             % distance_city,
+    )
+))
+site_map3.add_child(folium.PolyLine(
+    locations=[[launch_site_lat, launch_site_lon], [city_lat, city_lon]],
+    weight=2, color='blue'
+))
+
+
+# --- Distance to the closest railway ---
+# Railway access is critical for transporting heavy rocket components
+# from manufacturing facilities to the launch site.
+railway_lat = 28.5728
+railway_lon = -80.5850
+
+distance_railway = calculate_distance(
+    launch_site_lat, launch_site_lon,
+    railway_lat, railway_lon
+)
+print(f"Distance to railway: {distance_railway:.2f} km")
+
+site_map3.add_child(folium.Marker(
+    [railway_lat, railway_lon],
+    icon=DivIcon(
+        icon_size=(20, 20), icon_anchor=(0, 0),
+        html='<div style="font-size: 12; color:#117a65;"><b>Railway: %.2f KM</b></div>'
+             % distance_railway,
+    )
+))
+site_map3.add_child(folium.PolyLine(
+    locations=[[launch_site_lat, launch_site_lon], [railway_lat, railway_lon]],
+    weight=2, color='green'
+))
+
+
+# --- Distance to the closest highway ---
+# Highway access supports the routine logistics of launch operations,
+# including crew transport and equipment delivery.
+highway_lat = 28.5620
+highway_lon = -80.5688
+
+distance_highway = calculate_distance(
+    launch_site_lat, launch_site_lon,
+    highway_lat, highway_lon
+)
+print(f"Distance to highway: {distance_highway:.2f} km")
+
+site_map3.add_child(folium.Marker(
+    [highway_lat, highway_lon],
+    icon=DivIcon(
+        icon_size=(20, 20), icon_anchor=(0, 0),
+        html='<div style="font-size: 12; color:#7d6608;"><b>Highway: %.2f KM</b></div>'
+             % distance_highway,
+    )
+))
+site_map3.add_child(folium.PolyLine(
+    locations=[[launch_site_lat, launch_site_lon], [highway_lat, highway_lon]],
+    weight=2, color='purple'
+))
+
+site_map3.save('task3_proximity_distances.html')
+print("Task 3 map saved to task3_proximity_distances.html")
+
+print("\nAll maps generated successfully.")
+print("Open the HTML files in a browser to interact with the maps.")
